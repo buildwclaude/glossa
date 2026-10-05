@@ -30,7 +30,16 @@ export class Reader {
   private chrome = false;
   private tapBlockedUntil = 0;
   private saveTimer = 0;
-  private location: { cfi?: string; fraction?: number; tocItem?: { label?: string; href?: string }; range?: Range; index?: number; time?: { section?: number } } = {};
+  private location: {
+    cfi?: string;
+    fraction?: number;
+    tocItem?: { label?: string; href?: string };
+    range?: Range;
+    index?: number;
+    time?: { section?: number };
+    section?: { current: number; total: number };
+    location?: { current: number; next: number; total: number };
+  } = {};
   private onCloseCb: (rec: BookRecord) => void;
   private closed = false;
   private sliding = false;
@@ -345,35 +354,23 @@ export class Reader {
     this.root.classList.toggle('is-zoomed', z > 1.01);
   }
 
-  private onPageTap(x: number, _y: number, target: Element | null) {
+  /** A tap shows or hides the controls; pages turn with a swipe. */
+  private onPageTap(_x: number, _y: number, target: Element | null) {
     if (performance.now() < this.tapBlockedUntil) return;
     if (target?.closest?.('a[href]')) return;
     if (document.querySelector('.selbar') || document.querySelector('.sheet--define.is-open')) {
       this.lookup.dismiss();
       return;
     }
-    if (this.view.isFixedLayout) {
-      // Wait a moment: this may be the first half of a double-tap.
-      clearTimeout(this.tapTimer);
-      this.tapTimer = window.setTimeout(() => {
+    // Fixed layout waits a moment: this may be the first half of a double-tap.
+    clearTimeout(this.tapTimer);
+    this.tapTimer = window.setTimeout(
+      () => {
         if (performance.now() < this.tapBlockedUntil) return;
-        this.tapZones(x, this.zoom > 1.01);
-      }, 280);
-      return;
-    }
-    this.tapZones(x, this.root.classList.contains('is-scrolled'));
-  }
-
-  private tapZones(x: number, noTurn: boolean) {
-    const w = innerWidth;
-    const scrolled = noTurn;
-    if (!scrolled && x < w * 0.27) {
-      this.setChrome(false);
-      void this.view.goLeft();
-    } else if (!scrolled && x > w * 0.73) {
-      this.setChrome(false);
-      void this.view.goRight();
-    } else this.setChrome(!this.chrome);
+        this.setChrome(!this.chrome);
+      },
+      this.view.isFixedLayout ? 280 : 0,
+    );
   }
 
   private onKey(e: KeyboardEvent) {
@@ -400,14 +397,21 @@ export class Reader {
     const q = (s: string) => this.root.querySelector<HTMLElement>(s)!;
     q('.reader__chapter').textContent = chapter;
     q('.reader__where').textContent = chapter;
-    q('.reader__pct').textContent = `${pct}%`;
+    // Page numbers: real pages for PDFs and comics; for reflowable books,
+    // pages of about 1,500 characters (a printed page), which stay put
+    // whatever the font size.
+    const page = this.view.isFixedLayout
+      ? d.section && { n: d.section.current + 1, of: d.section.total }
+      : d.location && { n: d.location.current + 1, of: Math.max(d.location.total, 1) };
+    const pageText = page ? `Page ${Math.min(page.n, page.of)} of ${page.of}` : '';
+    q('.reader__pct').textContent = pageText ? `${pageText} · ${pct}%` : `${pct}%`;
     const mins = d.time?.section;
     q('.reader__status-l').textContent = this.view.isFixedLayout
-      ? ''
+      ? `${pct}%`
       : mins != null && mins > 0.5
         ? `${Math.round(mins)} min left in chapter`
         : chapter;
-    q('.reader__status-r').textContent = `${pct}%`;
+    q('.reader__status-r').textContent = page ? `${Math.min(page.n, page.of)} / ${page.of}` : `${pct}%`;
     if (!this.sliding) this.root.querySelector<HTMLInputElement>('.reader__slider')!.value = String(Math.round((d.fraction ?? 0) * 1000));
     this.updateBookmark();
     if (moved) this.lookup.dismiss();

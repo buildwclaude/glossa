@@ -3,10 +3,12 @@ import * as THREE from 'three';
 /**
  * The library as a 3D bookshelf: solid cloth-bound books on a wooden shelf.
  *
- * Each book is a box with painted faces — a rounded, cloth-textured spine
- * in the colour of its cover with gilt bands and title, cream page edges on
- * top and at the fore-edge, darker boards at the sides. Light and shade are
- * painted in, so no lights are needed and every frame is cheap.
+ * Each book is dressed from its own cover: the front board is the cover,
+ * and the spine is made from the cover's edge — its colours and artwork,
+ * softened, with the title set in whichever of light or dark reads best on
+ * it. Books without a cover get a cloth binding in a colour from their
+ * title. Cream page edges top and fore-edge; light and shade are painted
+ * in, so no lights are needed and every frame is cheap.
  *
  * Swipe sideways to slide the shelf (it carries momentum and settles on a
  * book); the middle book rises a little and is described under the shelf.
@@ -112,6 +114,9 @@ export async function createBookshelf(stage: HTMLElement, options: BookshelfOpti
   const live = new Map<string, Volume>();
   const spineCache = new Map<string, THREE.CanvasTexture>(); // LRU by insertion
   const faceCache = new Map<string, THREE.CanvasTexture>();
+  // Decoded cover thumbnails and their front-board textures, by book.
+  const bitmaps = new Map<string, Promise<ImageBitmap | null>>();
+  const covers = new Map<string, THREE.CanvasTexture>();
   let dark = isDark();
 
   let scroll = 0; // world x under the centre of the view
@@ -197,15 +202,53 @@ export async function createBookshelf(stage: HTMLElement, options: BookshelfOpti
     return t;
   }
 
-  function spineTex(slot: Slot) {
-    const key = `${slot.book.id}|${slot.book.title}|${slot.tone}|${Math.round((slot.book.progress ?? 0) * 100)}`;
+  function bitmap(book: ShelfBook) {
+    let p = bitmaps.get(book.id);
+    if (!p) {
+      p = book.cover ? createImageBitmap(book.cover).catch(() => null) : Promise.resolve(null);
+      bitmaps.set(book.id, p);
+      // Keep a bounded number decoded.
+      while (bitmaps.size > 120) {
+        const [k, old] = bitmaps.entries().next().value as [string, Promise<ImageBitmap | null>];
+        if (live.has(k)) break;
+        bitmaps.delete(k);
+        void old.then((b) => b?.close());
+        covers.get(k)?.dispose();
+        covers.delete(k);
+      }
+    }
+    return p;
+  }
+
+  function coverTex(slot: Slot, img: ImageBitmap) {
+    let t = covers.get(slot.book.id);
+    if (!t) {
+      t = tex(paintCover(document.createElement('canvas'), slot, img), anisotropy);
+      covers.set(slot.book.id, t);
+    }
+    return t;
+  }
+
+  /** Swaps the plain faces for ones made from the book's cover, once it's decoded. */
+  async function dress(v: Volume) {
+    const slot = v.slot;
+    const img = await bitmap(slot.book);
+    if (!img || v.slot !== slot || !live.has(slot.book.id)) return;
+    v.mats[0]!.map = coverTex(slot, img);
+    v.mats[4]!.map = spineTex(slot, img);
+    v.mats[0]!.needsUpdate = v.mats[4]!.needsUpdate = true;
+    wake();
+  }
+
+  function spineTex(slot: Slot, img?: ImageBitmap) {
+    const key = `${slot.book.id}|${slot.book.title}|${slot.tone}|${Math.round((slot.book.progress ?? 0) * 100)}|${img ? 'c' : 'p'}`;
     let t = spineCache.get(key);
     if (t) {
       spineCache.delete(key);
       spineCache.set(key, t);
       return t;
     }
-    t = tex(paintSpine(document.createElement('canvas'), slot), anisotropy);
+    t = tex(img ? paintCoverSpine(document.createElement('canvas'), slot, img) : paintSpine(document.createElement('canvas'), slot), anisotropy);
     spineCache.set(key, t);
     while (spineCache.size > 90) {
       const [k, old] = spineCache.entries().next().value as [string, THREE.CanvasTexture];
@@ -247,14 +290,13 @@ export async function createBookshelf(stage: HTMLElement, options: BookshelfOpti
     v.shadow.position.x = slot.x;
     row.add(v.mesh, v.shadow);
     live.set(slot.book.id, v);
+    if (slot.book.cover) void dress(v);
     return v;
   }
 
   function unmount(v: Volume) {
     row.remove(v.mesh, v.shadow);
     live.delete(v.slot.book.id);
-    const cover = v.mats[0]!.map;
-    if (cover && cover.userData.cover) cover.dispose();
     pool.push(v);
   }
 
@@ -428,28 +470,28 @@ export async function createBookshelf(stage: HTMLElement, options: BookshelfOpti
 
   /* -------------------------------------------------------- pull / put */
   async function pullOut(v: Volume) {
-    if (focused && focused !== v) restoreCover(focused);
     focused = v;
     target = v.slot.x;
     hovered = null;
     stage.classList.add('has-pick');
     options.onPick(v.slot.book);
     wake();
-    // Its real cover on the front board, if the book has one.
-    const coverTex = await coverTexture(v.slot, anisotropy);
-    if (focused === v) {
-      v.mats[0]!.map = coverTex;
+    // A book without a cover image gets a painted one on its front board.
+    if (!v.slot.book.cover && !v.mats[0]!.map?.userData.cover) {
+      v.mats[0]!.map = plainCover(v.slot);
       v.mats[0]!.needsUpdate = true;
       wake();
-    } else coverTex.dispose();
+    }
   }
 
-  function restoreCover(v: Volume) {
-    const board = faceTex('board', v.slot.tone);
-    const cover = v.mats[0]!.map;
-    v.mats[0]!.map = board;
-    v.mats[0]!.needsUpdate = true;
-    if (cover && cover !== board && cover.userData.cover) cover.dispose();
+  function plainCover(slot: Slot) {
+    let t = covers.get(slot.book.id);
+    if (!t) {
+      t = tex(paintCover(document.createElement('canvas'), slot, null), anisotropy);
+      t.userData.cover = true;
+      covers.set(slot.book.id, t);
+    }
+    return t;
   }
 
   /** Puts the pulled-out book back on the shelf. */
@@ -458,7 +500,6 @@ export async function createBookshelf(stage: HTMLElement, options: BookshelfOpti
     if (!v) return;
     focused = null;
     stage.classList.remove('has-pick');
-    restoreCover(v);
     options.onPick(null);
     wake();
   }
@@ -568,6 +609,16 @@ export async function createBookshelf(stage: HTMLElement, options: BookshelfOpti
     setBooks(books: ShelfBook[], keepId?: string) {
       const current = keepId ?? (centered >= 0 ? slots[centered]?.book.id : undefined);
       if (focused) putBack();
+      // A changed cover (or progress) means fresh textures for that book.
+      const prev = new Map(slots.map((s) => [s.book.id, s.book]));
+      for (const b of books) {
+        const o = prev.get(b.id);
+        if (o && o.cover !== b.cover) {
+          bitmaps.delete(b.id);
+          covers.get(b.id)?.dispose();
+          covers.delete(b.id);
+        }
+      }
       for (const v of [...live.values()]) unmount(v);
       layoutSlots(books);
       const i = Math.max(0, slots.findIndex((s) => s.book.id === current));
@@ -839,57 +890,122 @@ function ellipsize(ctx: CanvasRenderingContext2D, text: string, max: number) {
   return s.trimEnd() + '…';
 }
 
-async function coverTexture(slot: Slot, anisotropy: number) {
-  const W = 640;
+/** The front board: the cover itself, or a painted cloth one. */
+function paintCover(c: HTMLCanvasElement, slot: Slot, img: ImageBitmap | null) {
+  const W = 512;
   const H = Math.round((W * slot.h) / DEPTH);
-  const c = document.createElement('canvas');
   const ctx = size(c, W, H);
-  const img = slot.book.cover ? await createImageBitmap(slot.book.cover).catch(() => null) : null;
   if (img) {
     const s = Math.max(W / img.width, H / img.height);
     const w = img.width * s;
     const h = img.height * s;
     ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
-    img.close();
     // The hinge, so it still reads as a bound book.
-    const hinge = ctx.createLinearGradient(0, 0, 40, 0);
+    const hinge = ctx.createLinearGradient(0, 0, 36, 0);
     hinge.addColorStop(0, 'rgba(0,0,0,0.35)');
     hinge.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = hinge;
-    ctx.fillRect(0, 0, 40, H);
-  } else {
-    // A cloth cover with a gilt frame and the title.
-    const base = slot.tone;
-    const g = ctx.createLinearGradient(0, 0, W, H);
-    g.addColorStop(0, shade(base, 1.1));
-    g.addColorStop(1, shade(base, 0.8));
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-    cloth(ctx, W, H, 99);
-    ctx.strokeStyle = '#e9c77b';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(40, 40, W - 80, H - 80);
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(54, 54, W - 108, H - 108);
-    const ink = isLight(base) ? '#2a2118' : '#fbf3df';
-    ctx.fillStyle = ink;
-    ctx.textAlign = 'center';
-    ctx.font = `600 66px ${SERIF}`;
-    const lines = wrapLines(ctx, slot.book.title, W - 160).slice(0, 5);
-    let y = H * 0.36 - (lines.length - 1) * 38;
-    for (const line of lines) {
-      ctx.fillText(line, W / 2, y);
-      y += 78;
-    }
-    if (slot.book.author) {
-      ctx.fillStyle = '#e9c77b';
-      ctx.font = `600 28px ${SANS}`;
-      ctx.fillText(ellipsize(ctx, slot.book.author.toUpperCase(), W - 160), W / 2, H * 0.78);
-    }
+    ctx.fillRect(0, 0, 36, H);
+    return c;
   }
-  const t = tex(c, anisotropy);
-  t.userData.cover = true;
-  return t;
+  const base = slot.tone;
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, shade(base, 1.1));
+  g.addColorStop(1, shade(base, 0.8));
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  cloth(ctx, W, H, 99);
+  ctx.strokeStyle = '#e9c77b';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(32, 32, W - 64, H - 64);
+  const ink = isLight(base) ? '#2a2118' : '#fbf3df';
+  ctx.fillStyle = ink;
+  ctx.textAlign = 'center';
+  ctx.font = `600 54px ${SERIF}`;
+  const lines = wrapLines(ctx, slot.book.title, W - 120).slice(0, 5);
+  let y = H * 0.36 - (lines.length - 1) * 30;
+  for (const line of lines) {
+    ctx.fillText(line, W / 2, y);
+    y += 64;
+  }
+  if (slot.book.author) {
+    ctx.fillStyle = '#e9c77b';
+    ctx.font = `600 22px ${SANS}`;
+    ctx.fillText(ellipsize(ctx, slot.book.author.toUpperCase(), W - 120), W / 2, H * 0.8);
+  }
+  return c;
+}
+
+/**
+ * A spine made from the cover: the cover's left edge, stretched across the
+ * spine and softened, so the book wears its own colours and artwork; then
+ * rounded with light and shade, and titled in light or dark, whichever
+ * reads on it.
+ */
+function paintCoverSpine(c: HTMLCanvasElement, slot: Slot, img: ImageBitmap) {
+  const H = 768;
+  const W = Math.max(56, Math.round((H * slot.t) / slot.h));
+  const ctx = size(c, W, H);
+
+  // The cover's edge strip, blurred into the spine.
+  const strip = Math.max(8, Math.round(img.width * 0.1));
+  ctx.filter = 'blur(9px) saturate(1.1)';
+  ctx.drawImage(img, 0, 0, strip, img.height, -8, -8, W + 16, H + 16);
+  ctx.filter = 'none';
+
+  // How light is it behind the title? Decides the type colour.
+  const probe = ctx.getImageData(Math.floor(W * 0.25), Math.floor(H * 0.2), Math.max(1, Math.floor(W * 0.5)), Math.floor(H * 0.6)).data;
+  let lum = 0;
+  for (let i = 0; i < probe.length; i += 16) lum += 0.2126 * probe[i]! + 0.7152 * probe[i + 1]! + 0.0722 * probe[i + 2]!;
+  lum /= (probe.length / 16) * 255;
+  const light = lum > 0.58;
+  // A veil evens out busy artwork so the title always reads.
+  ctx.fillStyle = light ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.22)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Round it: darker at the hinges, a soft sheen just off-centre.
+  const g = ctx.createLinearGradient(0, 0, W, 0);
+  g.addColorStop(0, 'rgba(0,0,0,0.42)');
+  g.addColorStop(0.2, 'rgba(0,0,0,0.04)');
+  g.addColorStop(0.38, 'rgba(255,255,255,0.16)');
+  g.addColorStop(0.6, 'rgba(255,255,255,0)');
+  g.addColorStop(0.86, 'rgba(0,0,0,0.12)');
+  g.addColorStop(1, 'rgba(0,0,0,0.42)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
+  const ink = light ? '#1d1a16' : '#fdfaf3';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = ink;
+
+  const p = slot.book.progress ?? 0;
+  if (p > 0.995) {
+    ctx.font = `700 ${Math.round(W * 0.26)}px ${SANS}`;
+    ctx.fillText('✓', W / 2, 30);
+  } else if (p >= 0.01) {
+    ctx.font = `700 ${Math.round(W * 0.2)}px ${SANS}`;
+    ctx.fillText(`${Math.round(p * 100)}%`, W / 2, 30);
+  }
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.rotate(Math.PI / 2);
+  ctx.shadowColor = light ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)';
+  ctx.shadowBlur = 4;
+  const author = slot.book.author.split(/[,;&]/)[0]!.trim();
+  const titleLen = author ? H * 0.56 : H * 0.72;
+  const px = fit(ctx, slot.book.title, (n) => `650 ${n}px ${SERIF}`, Math.round(W * 0.42), titleLen);
+  ctx.font = `650 ${px}px ${SERIF}`;
+  ctx.fillText(ellipsize(ctx, slot.book.title, titleLen), author ? -H * 0.07 : 0, 1);
+  if (author) {
+    ctx.globalAlpha = 0.85;
+    ctx.font = `600 ${Math.round(W * 0.17)}px ${SANS}`;
+    const surname = author.split(/\s+/).pop()!.toUpperCase();
+    ctx.fillText(ellipsize(ctx, surname, H * 0.2), H * 0.33, 1);
+  }
+  ctx.restore();
+  return c;
 }
 
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, max: number) {
