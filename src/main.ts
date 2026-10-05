@@ -54,6 +54,10 @@ app.innerHTML = `
 
 const $ = <T extends HTMLElement = HTMLElement>(s: string) => app.querySelector<T>(s)!;
 const fileInput = $<HTMLInputElement>('.lib__file');
+// Android's picker only knows MIME types, and has none for .azw3, .fb2,
+// .cbz or .md — it would grey those files out. Glossa reads the bytes to
+// tell formats apart anyway, so on the phone every file is offered.
+if (isNative) fileInput.removeAttribute('accept');
 const stage = $('.lib__stage');
 
 let books: BookRecord[] = [];
