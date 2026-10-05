@@ -25,20 +25,21 @@ jobs:
     env:
       GLOSSA_VERSION_CODE: ${{ github.run_number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
           cache: gradle
 
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest ships the Android SDK (ANDROID_HOME); Gradle fetches
+      # any missing platform or build-tools itself.
 
       - name: Version
         run: |
@@ -84,7 +85,7 @@ jobs:
           cp out/Glossa.apk "out/Glossa-${GLOSSA_VERSION_NAME}.apk"
           ls -la out
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: Glossa-${{ env.GLOSSA_VERSION_NAME }}
           path: out/Glossa-${{ env.GLOSSA_VERSION_NAME }}.apk
