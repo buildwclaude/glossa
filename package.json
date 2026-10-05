@@ -1,0 +1,37 @@
+{
+  "name": "glossa",
+  "version": "1.0.0",
+  "description": "Glossa — an ebook reader for every format, with a 3D bookshelf and an offline tap-and-hold dictionary.",
+  "scripts": {
+    "dev": "vite",
+    "dict": "node scripts/build-dict.mjs",
+    "build": "node scripts/build-dict.mjs --if-missing && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "android:sync": "npm run build && cap sync android"
+  },
+  "author": "buildwclaude",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.4",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/literata": "^5.3.0",
+    "@fontsource/instrument-serif": "^5.3.0",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@types/three": "^0.186.0",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2",
+    "wordnet-db": "^3.1.14"
+  },
+  "private": true
+}

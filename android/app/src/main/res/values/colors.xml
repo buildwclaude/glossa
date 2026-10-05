@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="glossa_paper">#F3F0E8</color>
+    <color name="colorPrimary">#17161A</color>
+    <color name="colorPrimaryDark">#17161A</color>
+    <color name="colorAccent">#D94F38</color>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Glossa</string>
+    <string name="title_activity_main">Glossa</string>
+    <string name="package_name">app.glossa.reader</string>
+    <string name="custom_url_scheme">app.glossa.reader</string>
+</resources>

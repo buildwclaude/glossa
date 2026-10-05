@@ -1,0 +1,3 @@
+foliate-js @ 78914aef4466eb960965702401634c2cb348e9b1 (MIT) — https://github.com/johnfactotum/foliate-js
+Local patch: pdf.js makePDF accepts { password }.
+Local patch: fixed-layout.js has a 'zoom-factor' attribute (pinch zoom) and safe centering.

@@ -1,0 +1,11 @@
+{
+  "appId": "app.glossa.reader",
+  "appName": "Glossa",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#f3f0e8"
+  },
+  "plugins": {
+    "StatusBar": { "overlaysWebView": true }
+  }
+}

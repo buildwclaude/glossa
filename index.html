@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <!--
+      Books are rendered from blob: URLs on this origin, so no script may run
+      except the app's own: book scripts are blocked outright.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' blob: data:; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' blob: data:; img-src 'self' blob: data: https: http:; font-src 'self' blob: data:; media-src 'self' blob: data:; frame-src 'self' blob: data:; connect-src 'self' blob: data: https://*.wiktionary.org https://*.wikipedia.org ws: http://localhost:*; object-src 'none'"
+    />
+    <meta name="theme-color" content="#f3f0e8" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111216" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <title>Glossa</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

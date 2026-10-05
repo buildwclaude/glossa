@@ -1,0 +1,113 @@
+name: Android APK
+
+# Every push to main builds a signed APK and publishes it on the rolling
+# "latest" release (direct link: releases/latest/download/Glossa.apk).
+# Tags like v1.2.0 get a release of their own. Pull requests just build.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GLOSSA_VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "GLOSSA_VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "GLOSSA_VERSION_NAME=1.0.${{ github.run_number }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build web app (and offline dictionary)
+        run: npm run build
+
+      - name: Sync Android project
+        run: npx cap sync android
+
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.GLOSSA_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.GLOSSA_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/glossa.p12"
+            echo "GLOSSA_KEYSTORE=$RUNNER_TEMP/glossa.p12" >> "$GITHUB_ENV"
+            echo "GLOSSA_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No signing secrets; the APK is signed with a debug key."
+          fi
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk out/Glossa.apk
+          cp out/Glossa.apk "out/Glossa-${GLOSSA_VERSION_NAME}.apk"
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Glossa-${{ env.GLOSSA_VERSION_NAME }}
+          path: out/Glossa-${{ env.GLOSSA_VERSION_NAME }}.apk
+          if-no-files-found: error
+
+      - name: Publish rolling release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f latest
+          git push -f origin latest
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest --title "Glossa (latest build)" --latest \
+              --notes "The newest build from main. Download **Glossa.apk** below and open it on your Android phone to install."
+          fi
+          gh release edit latest --title "Glossa ${GLOSSA_VERSION_NAME}" --latest
+          gh release upload latest out/Glossa.apk --clobber
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/Glossa.apk "out/Glossa-${GLOSSA_VERSION_NAME}.apk" \
+            --title "Glossa ${GLOSSA_VERSION_NAME}" --generate-notes
