@@ -92,39 +92,77 @@ export class Sheet {
     this.opts.onClose?.();
   }
 
+  /**
+   * Swipe down to dismiss (up, for a sheet at the top). Touch events, not
+   * pointer events: the browser claims a vertical pan for scrolling and
+   * cancels pointer events, which is why a plain pointer drag never closed.
+   */
   private dragToClose() {
     let y0 = 0;
+    let x0 = 0;
     let dy = 0;
-    let active = false;
-    const start = (e: PointerEvent) => {
-      // Only from the handle/header, or from the body when it's scrolled to the top.
-      const t = e.target as HTMLElement;
-      const fromHead = !!t.closest('.sheet__handle, .sheet__head');
-      if (!fromHead && (this.body.scrollTop > 0 || t.closest('input, button, a, [data-nodrag]'))) return;
-      if (this.root.classList.contains('sheet--top')) return;
-      active = true;
-      y0 = e.clientY;
+    let state: 'idle' | 'maybe' | 'drag' = 'idle';
+    let t0 = 0;
+    const dir = () => (this.root.classList.contains('sheet--top') ? -1 : 1);
+
+    const start = (y: number, x: number, target: HTMLElement) => {
+      const fromHead = !!target.closest('.sheet__handle, .sheet__head');
+      // From the body only when it's scrolled to its start, and not from a field.
+      if (!fromHead && target.closest('input, textarea, [data-nodrag]')) return;
+      state = 'maybe';
+      y0 = y;
+      x0 = x;
       dy = 0;
+      t0 = performance.now();
     };
-    const move = (e: PointerEvent) => {
-      if (!active) return;
-      dy = Math.max(0, e.clientY - y0);
-      if (dy > 6) {
-        this.root.style.transition = 'none';
-        this.root.style.transform = `translateY(${dy}px)`;
+    const move = (y: number, x: number, e: Event) => {
+      if (state === 'idle') return;
+      const d = (y - y0) * dir();
+      if (state === 'maybe') {
+        if (Math.abs(x - x0) > 12 && Math.abs(x - x0) > Math.abs(y - y0)) return void (state = 'idle');
+        // Pulling towards the edge while the list is at its start: take it.
+        const atStart = dir() > 0 ? this.body.scrollTop <= 0 : this.body.scrollTop + this.body.clientHeight >= this.body.scrollHeight - 1;
+        if (d > 6 && atStart) state = 'drag';
+        else if (Math.abs(y - y0) > 8) return void (state = 'idle');
+        else return;
       }
+      if (e.cancelable) e.preventDefault();
+      dy = Math.max(0, d);
+      this.root.style.transition = 'none';
+      this.root.style.transform = `translateY(${dy * dir()}px)`;
     };
     const end = () => {
-      if (!active) return;
-      active = false;
+      if (state !== 'drag') return void (state = 'idle');
+      state = 'idle';
+      const fast = dy / Math.max(1, performance.now() - t0) > 0.5;
       this.root.style.transition = '';
       this.root.style.transform = '';
-      if (dy > 90) this.close();
+      if (dy > 80 || (fast && dy > 24)) this.close();
     };
-    this.root.addEventListener('pointerdown', start);
-    this.root.addEventListener('pointermove', move);
-    this.root.addEventListener('pointerup', end);
-    this.root.addEventListener('pointercancel', end);
+
+    this.root.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) start(e.touches[0]!.clientY, e.touches[0]!.clientX, e.target as HTMLElement);
+    }, { passive: true });
+    this.root.addEventListener('touchmove', (e) => {
+      const t = e.touches[0];
+      if (t) move(t.clientY, t.clientX, e);
+    }, { passive: false });
+    this.root.addEventListener('touchend', end);
+    this.root.addEventListener('touchcancel', end);
+
+    // Mouse (desktop): drag the handle.
+    this.root.addEventListener('mousedown', (e) => {
+      if (!(e.target as HTMLElement).closest('.sheet__handle, .sheet__head')) return;
+      start(e.clientY, e.clientX, e.target as HTMLElement);
+      const mm = (ev: MouseEvent) => move(ev.clientY, ev.clientX, ev);
+      const mu = () => {
+        end();
+        removeEventListener('mousemove', mm);
+        removeEventListener('mouseup', mu);
+      };
+      addEventListener('mousemove', mm);
+      addEventListener('mouseup', mu);
+    });
   }
 }
 

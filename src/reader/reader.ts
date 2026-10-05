@@ -52,10 +52,10 @@ export class Reader {
       <header class="reader__top">
         <button class="ibtn" data-a="back" aria-label="Back to library">${icon('back')}</button>
         <div class="reader__title"><span class="reader__book"></span><span class="reader__chapter"></span></div>
-        <button class="ibtn" data-a="toc" aria-label="Contents">${icon('toc')}</button>
         <button class="ibtn" data-a="search" aria-label="Search">${icon('search')}</button>
         <button class="ibtn" data-a="bookmark" aria-label="Bookmark this page" aria-pressed="false">${icon('bookmark')}</button>
         <button class="ibtn" data-a="settings" aria-label="Reading settings"><span class="aa">Aa</span></button>
+        <button class="ibtn" data-a="toc" aria-label="Contents">${icon('toc')}</button>
       </header>
       <footer class="reader__bottom">
         <div class="reader__progress"><span class="reader__where"></span><span class="reader__pct"></span></div>

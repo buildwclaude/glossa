@@ -4,7 +4,7 @@
  * and notes — highlights and bookmarks — keyed by book.
  */
 
-export type Format = 'epub' | 'pdf' | 'mobi' | 'azw3' | 'fb2' | 'cbz' | 'txt' | 'html' | 'md';
+export type Format = 'epub' | 'pdf' | 'mobi' | 'azw3' | 'fb2' | 'cbz' | 'txt' | 'html' | 'md' | 'docx';
 
 export type BookRecord = {
   id: string;
@@ -12,6 +12,8 @@ export type BookRecord = {
   author: string;
   format: Format;
   size: number;
+  /** Found on the device by a scan: read in place from here, never copied. */
+  path?: string;
   /** A small JPEG of the cover, if the book has one. */
   cover?: Blob;
   /** The spine's colour, taken from the cover or derived from the title. */

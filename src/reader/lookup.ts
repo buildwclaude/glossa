@@ -23,8 +23,8 @@ export type LookupHost = {
   bounds: () => DOMRect;
 };
 
-const HOLD_MS = 380;
-const SLOP = 10;
+const HOLD_MS = 520;
+const SLOP = 8;
 export const COLORS = { yellow: '#f6d365', green: '#9be2a8', blue: '#9cc7ff', pink: '#ffa9c6' } as const;
 
 export class Lookup {
@@ -51,19 +51,29 @@ export class Lookup {
   attach(doc: Document) {
     const win = doc.defaultView!;
     let timer = 0;
-    let start: { x: number; y: number } | null = null;
+    // Where the finger went down, on screen, and where the page was then:
+    // if either moves before the hold completes, it was a swipe, not a hold.
+    let start: { sx: number; sy: number; fx: number; fy: number } | null = null;
     let anchor: Range | null = null;
     let active = false;
+    const framePos = () => {
+      const r = (win.frameElement as HTMLElement | null)?.getBoundingClientRect();
+      return { fx: r?.left ?? 0, fy: r?.top ?? 0 };
+    };
 
     const cancel = () => {
       clearTimeout(timer);
       start = null;
     };
 
-    const begin = (x: number, y: number) => {
+    const begin = (x: number, y: number, sx: number, sy: number) => {
       cancel();
-      start = { x, y };
+      start = { sx, sy, ...framePos() };
       timer = win.setTimeout(() => {
+        const s0 = start;
+        start = null;
+        const now = framePos();
+        if (!s0 || Math.abs(now.fx - s0.fx) > 2 || Math.abs(now.fy - s0.fy) > 2) return;
         const word = wordAt(doc, x, y, this.host.lang());
         if (!word) return;
         active = true;
@@ -76,7 +86,7 @@ export class Lookup {
       }, HOLD_MS);
     };
 
-    const drag = (x: number, y: number, e: Event) => {
+    const drag = (x: number, y: number, e: Event, sx?: number, sy?: number) => {
       if (active && anchor) {
         e.preventDefault();
         e.stopImmediatePropagation();
@@ -107,7 +117,7 @@ export class Lookup {
         }
         return;
       }
-      if (start && Math.hypot(x - start.x, y - start.y) > SLOP) cancel();
+      if (start && sx != null && sy != null && Math.hypot(sx - start.sx, sy - start.sy) > SLOP) cancel();
     };
 
     const end = (e: Event) => {
@@ -128,7 +138,7 @@ export class Lookup {
       (e) => {
         if (e.touches.length !== 1) return cancel();
         const t = e.touches[0]!;
-        begin(t.clientX, t.clientY);
+        begin(t.clientX, t.clientY, t.screenX, t.screenY);
       },
       { capture: true, passive: true },
     );
@@ -136,7 +146,7 @@ export class Lookup {
       'touchmove',
       (e) => {
         const t = e.touches[0];
-        if (t) drag(t.clientX, t.clientY, e);
+        if (t) drag(t.clientX, t.clientY, e, t.screenX, t.screenY);
       },
       { capture: true, passive: false },
     );
@@ -149,9 +159,9 @@ export class Lookup {
     // Mouse: the same press-and-hold, plus double-click.
     doc.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || (e as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } }).sourceCapabilities?.firesTouchEvents) return;
-      begin(e.clientX, e.clientY);
+      begin(e.clientX, e.clientY, e.screenX, e.screenY);
     });
-    doc.addEventListener('mousemove', (e) => (e.buttons & 1 ? drag(e.clientX, e.clientY, e) : undefined));
+    doc.addEventListener('mousemove', (e) => (e.buttons & 1 ? drag(e.clientX, e.clientY, e, e.screenX, e.screenY) : undefined));
     doc.addEventListener('mouseup', (e) => end(e));
     doc.addEventListener('dblclick', (e) => {
       const word = wordAt(doc, e.clientX, e.clientY, this.host.lang());
@@ -161,7 +171,11 @@ export class Lookup {
       this.define(word.toString(), word);
     });
 
-    // No native selection or context menu inside the book.
+    // No native selection or context menu inside the book: Android's own
+    // long-press selection would fight both page swipes and this lookup.
+    doc.documentElement.style.setProperty('-webkit-user-select', 'none', 'important');
+    doc.documentElement.style.setProperty('user-select', 'none', 'important');
+    doc.documentElement.style.setProperty('-webkit-touch-callout', 'none', 'important');
     doc.addEventListener('selectstart', (e) => e.preventDefault());
     doc.addEventListener('contextmenu', (e) => e.preventDefault());
   }

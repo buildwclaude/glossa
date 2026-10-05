@@ -2,7 +2,7 @@
 
 **An ebook reader for every format, with a 3D bookshelf and a dictionary that's actually in the app.**
 
-Press and hold any word and its meaning slides up from the bottom of the screen, offline, without leaving the book. Your library is a frosted-glass bookshelf you swipe through. Tap a book and it comes off the shelf and opens.
+Press and hold any word and its meaning slides up from the bottom of the screen, offline, without leaving the book. Your library is a 3D bookshelf of cloth-bound books you swipe through: tap a book to take it off the shelf, tap again to open it. Glossa can also find every ebook and document already on your phone, the way a video player finds your videos.
 
 ### [⬇ Download the latest APK](https://github.com/buildwclaude/glossa/releases/latest/download/Glossa.apk)
 
@@ -19,9 +19,13 @@ Open the file on your Android phone to install it. Android will ask you to allow
 | **MOBI, AZW, AZW3 / KF8, PRC** | Kindle formats (DRM-free) |
 | **FB2, FBZ** | FictionBook |
 | **CBZ** | Comic book archives |
+| **Word (DOCX)** | Headings become chapters |
 | **TXT, Markdown, HTML** | Split into chapters automatically |
 
-Open books from inside the app (**Add books**), or tap a file in any file manager, download list or chat app and pick **Glossa** from the list. Sharing a file to Glossa works too.
+Three ways in:
+- **Find books on this phone** (the scan button): Glossa looks through your storage for ebooks and documents and puts them on the shelf. Files are read where they are, never copied, and new downloads are picked up each time you open the app. Android asks you once to allow "All files access".
+- **Add books**: pick files yourself.
+- **Open with / Share**: tap a file in any file manager, download list or chat app and choose Glossa.
 
 ## The dictionary
 
@@ -41,11 +45,11 @@ Open books from inside the app (**Add books**), or tap a file in any file manage
 
 ## The shelf
 
-The library is the WebGL bookshelf from the portfolio site, rebuilt for browsing:
+The library is a 3D bookshelf (grown out of the one on the portfolio site):
 
-- Each spine takes its colour from the book's cover.
+- Solid cloth-bound books on a wooden shelf. Each spine takes its colour from the book's cover and gets gilt bands, its title and its author.
 - Swipe to slide the shelf. It keeps your momentum, tilts a little in 3D, and settles on a book. The book in the middle rises, and its details and progress show below.
-- Tap a book: it comes off the shelf, turns to show its cover, and opens.
+- Tap a book: it comes off the shelf and turns to show its cover. Tap it again to open it. Tap elsewhere, swipe or press back to put it back.
 - Only the books near the screen are drawn, and nothing is drawn while the shelf is still, so a library of thousands is as smooth as one of ten and costs no battery when idle.
 - **All books** (the grid button) gives a searchable cover grid for big libraries.
 
@@ -70,7 +74,8 @@ cd android && ./gradlew assembleRelease
 ### How it's built
 
 - **Vite + TypeScript**, no framework. The app shell, shelf and reader are plain DOM and Three.js.
-- **[Capacitor 8](https://capacitorjs.com)** wraps the web app for Android. A small native plugin ([`GlossaPlugin.java`](android/app/src/main/java/app/glossa/reader/GlossaPlugin.java)) receives files from other apps, keeps the screen on and handles the volume keys.
+- **[Capacitor 8](https://capacitorjs.com)** wraps the web app for Android. A small native plugin ([`GlossaPlugin.java`](android/app/src/main/java/app/glossa/reader/GlossaPlugin.java)) receives files from other apps, scans storage for books, keeps the screen on and handles the volume keys.
+- **[mammoth](https://github.com/mwilliamson/mammoth.js)** turns Word documents into HTML.
 - **[foliate-js](https://github.com/johnfactotum/foliate-js)** parses and lays out the books, with **[PDF.js](https://mozilla.github.io/pdf.js/)** for PDFs. Both are vendored in `public/foliate-js`; local patches are listed in `public/foliate-js/VERSION`.
 - **Three.js** draws the shelf. Every surface is painted on a canvas, so there are no image assets.
 - The library (books, positions, highlights) lives in **IndexedDB** on the device.
@@ -86,7 +91,8 @@ cd android && ./gradlew assembleRelease
 - [PDF.js](https://github.com/mozilla/pdf.js): Apache 2.0
 - [WordNet 3.1](https://wordnet.princeton.edu): © 2011 Princeton University, [WordNet License](https://wordnet.princeton.edu/license-and-commercial-use) (included as `dict/LICENSE.txt` in every build)
 - [Three.js](https://threejs.org): MIT
-- Fonts: Literata, Inter and Instrument Serif, all SIL Open Font License
+- [mammoth](https://github.com/mwilliamson/mammoth.js): BSD-2-Clause
+- Fonts: Literata and Inter, both SIL Open Font License
 - The welcome book, *Alice's Adventures in Wonderland*, is from [Project Gutenberg](https://www.gutenberg.org/ebooks/11)
 
 ## License

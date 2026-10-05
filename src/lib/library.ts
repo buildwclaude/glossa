@@ -40,50 +40,97 @@ const str = (v: unknown): string => {
   return String(v);
 };
 
+type Described = Omit<BookRecord, 'id' | 'size' | 'addedAt'>;
+
+/** Format, title, author, cover and spine colour of a file. */
+async function describe(file: File): Promise<Described | null> {
+  const name = file.name;
+  const format = await detectFormat(file, name);
+  if (!format) return null;
+  let fbook: FBook | null = null;
+  try {
+    fbook = await openBook(file, format);
+  } catch (e) {
+    // A locked PDF still goes on the shelf; the password is asked on opening.
+    if (!(e instanceof PasswordError)) throw e;
+  }
+  const meta = fbook?.metadata ?? {};
+  const fallbackTitle = name.replace(/\.(fb2\.zip|[^.]+)$/i, '').replace(/[_]+/g, ' ').trim();
+  const title = str(meta.title).trim() || fallbackTitle;
+  const author = str(meta.author ?? meta.creator).trim();
+
+  let cover: Blob | undefined;
+  let color = colorFromText(title + author);
+  try {
+    const raw: Blob | null = await fbook?.getCover?.();
+    if (raw && raw.size) {
+      const thumb = await thumbnail(raw);
+      if (thumb) {
+        cover = thumb.blob;
+        color = thumb.color;
+      }
+    }
+  } catch {
+    /* a book without a readable cover gets a painted one */
+  }
+  fbook?.destroy?.();
+  return { title, author, format, cover, color };
+}
+
 export async function importFile(file: File): Promise<ImportResult> {
   const name = file.name;
   try {
-    const format = await detectFormat(file, name);
-    if (!format) return { name, error: 'Not a book format Glossa can read' };
     const id = await fingerprint(file);
     const existing = await db.book(id);
     if (existing) return { name, book: existing, duplicate: true };
-
-    let fbook: FBook | null = null;
-    try {
-      fbook = await openBook(file, format);
-    } catch (e) {
-      // A locked PDF still goes on the shelf; the password is asked on opening.
-      if (!(e instanceof PasswordError)) throw e;
-    }
-    const meta = fbook?.metadata ?? {};
-    const fallbackTitle = name.replace(/\.(fb2\.zip|[^.]+)$/i, '').replace(/[_]+/g, ' ').trim();
-    const title = str(meta.title).trim() || fallbackTitle;
-    const author = str(meta.author ?? meta.creator).trim();
-
-    let cover: Blob | undefined;
-    let color = colorFromText(title + author);
-    try {
-      const raw: Blob | null = await fbook?.getCover?.();
-      if (raw && raw.size) {
-        const thumb = await thumbnail(raw);
-        if (thumb) {
-          cover = thumb.blob;
-          color = thumb.color;
-        }
-      }
-    } catch {
-      /* a book without a readable cover gets a painted one */
-    }
-    fbook?.destroy?.();
-
-    const book: BookRecord = { id, title, author, format, size: file.size, cover, color, addedAt: Date.now() };
+    const d = await describe(file);
+    if (!d) return { name, error: 'Not a book format Glossa can read' };
+    const book: BookRecord = { id, size: file.size, addedAt: Date.now(), ...d };
     await db.putFile(id, file);
     await db.putBook(book);
     return { name, book };
   } catch (e) {
     console.error(e);
     return { name, error: 'This file could not be opened' };
+  }
+}
+
+/** The library id of a file found on the device: stable for its path. */
+export function pathId(path: string) {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < path.length; i++) {
+    const c = path.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619);
+    h2 = Math.imul(h2 ^ c, 2246822519);
+  }
+  return `p${(h1 >>> 0).toString(16)}${(h2 >>> 0).toString(16)}`;
+}
+
+const EXT_FORMAT: Record<string, Format> = {
+  epub: 'epub', pdf: 'pdf', mobi: 'mobi', prc: 'mobi', azw: 'azw3', azw3: 'azw3', kf8: 'azw3', fb2: 'fb2', fbz: 'fb2', cbz: 'cbz', docx: 'docx',
+};
+
+/**
+ * Adds a book found by a device scan; it stays where it is. `file` is null
+ * for very large files, which are listed by name rather than read whole.
+ */
+export async function importPath(f: { path: string; name: string; size: number; modified: number }, file: File | null): Promise<ImportResult> {
+  try {
+    const ext = f.name.split('.').pop()!.toLowerCase();
+    const title = f.name.replace(/\.(fb2\.zip|[^.]+)$/i, '').replace(/[_]+/g, ' ').trim();
+    const d = file
+      ? await describe(file)
+      : EXT_FORMAT[ext]
+        ? { title, author: '', format: EXT_FORMAT[ext]!, color: colorFromText(title) }
+        : null;
+    if (!d) return { name: f.name, error: 'Not a book format Glossa can read' };
+    const book: BookRecord = { id: pathId(f.path), size: f.size, addedAt: f.modified || Date.now(), path: f.path, ...d };
+    await db.putBook(book);
+    return { name: f.name, book };
+  } catch (e) {
+    console.warn('scan import failed', f.path, e);
+    return { name: f.name, error: 'This file could not be opened' };
   }
 }
 

@@ -1,10 +1,10 @@
-import '@fontsource/instrument-serif/latin-400.css';
+import '@fontsource-variable/literata';
 import '@fontsource-variable/inter';
 import './styles.css';
 
 import { db, type BookRecord } from './lib/db';
 import { ACCEPT, FORMAT_LABEL } from './lib/formats';
-import { importFile, seedSample } from './lib/library';
+import { importFile, importPath, seedSample } from './lib/library';
 import { native, isNative } from './lib/native';
 import { createBookshelf, supportsWebGL, type Bookshelf, type ShelfBook } from './shelf/bookshelf';
 import { Reader } from './reader/reader';
@@ -22,11 +22,13 @@ app.innerHTML = `
     <h1 class="brand">Glossa<span class="brand__dot" aria-hidden="true"></span></h1>
     <span class="lib__count"></span>
     <span class="grow"></span>
+    ${isNative ? `<button class="ibtn" data-a="scan" aria-label="Find books on this phone">${icon('scan')}</button>` : ''}
     <button class="ibtn" data-a="find" aria-label="All books">${icon('grid')}</button>
     <button class="btn btn--primary btn--add" data-a="add">${icon('plus')}<span>Add books</span></button>
   </header>
   <main class="lib__stage" aria-label="Bookshelf">
-    <p class="lib__hint">Swipe to browse · tap a book to read</p>
+    <p class="lib__hint">Swipe to browse · tap a book to take it out</p>
+    <div class="scanbar" hidden><span class="scanbar__spin"></span><span class="scanbar__text"></span></div>
   </main>
   <section class="lib__card" aria-live="polite">
     <div class="card">
@@ -44,8 +46,11 @@ app.innerHTML = `
     <div class="empty">
       <div class="empty__art" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
       <h2 class="empty__title">Your shelf is empty</h2>
-      <p class="empty__text">Add EPUB, PDF, MOBI, AZW3, FB2, CBZ, TXT or Markdown files. Or open one from your file manager with Glossa.</p>
-      <button class="btn btn--primary" data-a="add">${icon('plus')}<span>Add books</span></button>
+      <p class="empty__text">${isNative ? 'Let Glossa find the ebooks and documents already on your phone, or add files yourself.' : 'Add EPUB, PDF, MOBI, AZW3, FB2, CBZ, Word, TXT or Markdown files.'}</p>
+      <div class="empty__actions">
+        ${isNative ? `<button class="btn btn--primary" data-a="scan">${icon('scan')}<span>Find books on this phone</span></button>` : ''}
+        <button class="btn ${isNative ? 'btn--ghost' : 'btn--primary'}" data-a="add">${icon('plus')}<span>Add books</span></button>
+      </div>
     </div>
   </section>
   <input class="lib__file" type="file" multiple accept="${ACCEPT}" hidden>
@@ -79,6 +84,13 @@ async function refresh(keepId?: string) {
   if (empty) showCard(null);
 }
 
+const HINT = 'Swipe to browse · tap a book to take it out';
+function onPick(sb: ShelfBook | null) {
+  $('.lib__hint').textContent = sb ? 'Tap the book again to open it' : HINT;
+  app.classList.toggle('has-pick', !!sb);
+  if (sb) showCard(sb);
+}
+
 function showCard(sb: ShelfBook | null) {
   current = sb ? books.find((b) => b.id === sb.id) ?? null : null;
   const card = $('.lib__card');
@@ -88,7 +100,8 @@ function showCard(sb: ShelfBook | null) {
   const pct = Math.round(p * 100);
   $('.card__kicker').textContent = [FORMAT_LABEL[current.format], p > 0.995 ? 'Finished' : pct > 0 ? `${pct}% read` : 'New'].join(' · ');
   $('.card__title').textContent = current.title;
-  $('.card__author').textContent = current.author || 'Unknown author';
+  $('.card__author').textContent = current.author;
+  $('.card__author').hidden = !current.author;
   $<HTMLElement>('.card__bar span').style.width = `${pct}%`;
   $('.btn--read span').textContent = p > 0.995 ? 'Read again' : pct > 0 ? 'Continue reading' : 'Start reading';
   // Re-run the little entrance so a new book reads as new.
@@ -103,9 +116,12 @@ function showCard(sb: ShelfBook | null) {
 async function openReader(id: string) {
   if (reader) return;
   const rec = await db.book(id);
-  const file = await db.file(id);
+  let file: Blob | undefined;
+  if (rec?.path) {
+    file = await native.readFile(rec.path, rec.path.split('/').pop()!).catch(() => undefined);
+  } else if (rec) file = await db.file(id);
   if (!rec || !file) {
-    toast('That book’s file is missing');
+    toast(rec?.path ? 'That file was moved or deleted' : 'That book’s file is missing');
     shelf?.putBack();
     return;
   }
@@ -179,6 +195,7 @@ app.addEventListener('click', async (e) => {
   const a = (e.target as HTMLElement).closest<HTMLElement>('[data-a]')?.dataset.a;
   if (!a) return;
   if (a === 'add') fileInput.click();
+  else if (a === 'scan') void scanDevice(true);
   else if (a === 'read' && current) void openReader(current.id);
   else if (a === 'find') openAllBooks();
   else if (a === 'remove' && current) {
@@ -186,6 +203,8 @@ app.addEventListener('click', async (e) => {
     const ok = await confirmSheet('Remove book?', `“${b.title}” and its highlights will be removed from Glossa. The original file is not affected.`, 'Remove', true);
     if (!ok) return;
     await db.removeBook(b.id);
+    // A scanned book stays off the shelf on the next scan.
+    if (b.path) await db.set('ignoredPaths', [...((await db.get<string[]>('ignoredPaths')) ?? []), b.path]);
     const i = books.findIndex((x) => x.id === b.id);
     await refresh(books[i + 1]?.id ?? books[i - 1]?.id);
     toast('Removed');
@@ -270,11 +289,88 @@ function renderFallback() {
   showCard(books[0] ? toShelf(books[0]) : null);
 }
 
+/* ----------------------------------------------------------------- scan */
+
+let scanning = false;
+
+function scanStatus(text: string | null) {
+  const bar = $('.scanbar');
+  bar.hidden = !text;
+  if (text) $('.scanbar__text').textContent = text;
+}
+
+/**
+ * Finds every book and document on the phone, the way a video player finds
+ * your videos. Files are read where they are, never copied. Runs quietly at
+ * every launch once allowed; `interactive` asks for access first.
+ */
+async function scanDevice(interactive: boolean) {
+  if (!isNative || scanning) return;
+  let granted = await native.storageGranted();
+  if (!granted) {
+    if (!interactive) return;
+    const ok = await confirmSheet(
+      'Find books on this phone',
+      'Glossa will look through your phone for ebooks and documents (EPUB, PDF, MOBI, AZW3, FB2, CBZ and Word) and put them on your shelf. Files stay where they are. Android will ask you to turn on “All files access” for Glossa.',
+      'Continue',
+    );
+    if (!ok) return;
+    granted = await native.requestStorage();
+    if (!granted) {
+      toast('Without file access Glossa can’t look for books', 3200);
+      return;
+    }
+  }
+  scanning = true;
+  scanStatus('Looking for books…');
+  try {
+    const found = await native.scan();
+    const all = await db.books();
+    const known = new Map(all.filter((b) => b.path).map((b) => [b.path!, b]));
+    const ignored = new Set((await db.get<string[]>('ignoredPaths')) ?? []);
+    const here = new Set(found.map((f) => f.path));
+    // Books whose file has gone are taken off the shelf.
+    let removed = 0;
+    if (found.length) {
+      for (const b of known.values()) {
+        if (!here.has(b.path!)) {
+          await db.removeBook(b.id);
+          removed++;
+        }
+      }
+    }
+    const fresh = found.filter((f) => !known.has(f.path) && !ignored.has(f.path)).sort((a, b) => b.modified - a.modified);
+    let added = 0;
+    for (let i = 0; i < fresh.length; i++) {
+      const f = fresh[i]!;
+      scanStatus(`Adding books · ${i + 1} of ${fresh.length}`);
+      // Very large files are listed by name; they're read only when opened.
+      const file = f.size > 150e6 ? null : await native.readFile(f.path, f.name).catch(() => undefined);
+      if (file === undefined) continue;
+      const r = await importPath(f, file);
+      if (r.book) added++;
+      if (added && added % 10 === 0 && !reader) await refresh();
+    }
+    if (added || removed) await refresh(current?.id);
+    if (interactive || added) toast(added ? `${added} book${added === 1 ? '' : 's'} found` : 'No new books found');
+  } catch (e) {
+    console.warn('scan failed', e);
+    if (interactive) toast('The scan didn’t finish. Try again.');
+  } finally {
+    scanning = false;
+    scanStatus(null);
+  }
+}
+
 /* ----------------------------------------------------------------- boot */
 
 native.onBack(() => {
   if (closeTopSheet()) return;
   if (reader?.back()) return;
+  if (shelf?.picked) {
+    shelf.putBack();
+    return;
+  }
   void native.exit();
 });
 native.onVolumeKey((dir) => reader?.onVolumeKey(dir));
@@ -289,6 +385,7 @@ async function boot() {
     try {
       shelf = await createBookshelf(stage, {
         onCenter: showCard,
+        onPick,
         onOpen: (b) => void openReader(b.id),
       });
     } catch (e) {
@@ -299,6 +396,8 @@ async function boot() {
   await refresh();
   document.documentElement.classList.add('is-ready');
   if (isNative) void native.statusStyle(matchMedia('(prefers-color-scheme: dark)').matches);
+  // Pick up books downloaded since last time.
+  setTimeout(() => void scanDevice(false), 1200);
 }
 
 void boot();

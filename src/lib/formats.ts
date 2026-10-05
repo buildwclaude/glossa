@@ -19,11 +19,11 @@ const loadPDF = () => import(/* @vite-ignore */ base() + 'pdf.js') as Promise<{ 
 
 export const ACCEPT = [
   '.epub', '.pdf', '.mobi', '.azw', '.azw3', '.kf8', '.prc', '.fb2', '.fbz', '.fb2.zip',
-  '.cbz', '.txt', '.text', '.md', '.markdown', '.html', '.htm', '.xhtml',
+  '.cbz', '.docx', '.txt', '.text', '.md', '.markdown', '.html', '.htm', '.xhtml',
 ].join(',');
 
 export const FORMAT_LABEL: Record<Format, string> = {
-  epub: 'EPUB', pdf: 'PDF', mobi: 'MOBI', azw3: 'AZW3', fb2: 'FB2', cbz: 'Comic', txt: 'Text', html: 'HTML', md: 'Markdown',
+  epub: 'EPUB', pdf: 'PDF', mobi: 'MOBI', azw3: 'AZW3', fb2: 'FB2', cbz: 'Comic', txt: 'Text', html: 'HTML', md: 'Markdown', docx: 'Word',
 };
 
 export class PasswordError extends Error {}
@@ -38,9 +38,11 @@ export async function detectFormat(file: Blob, name: string): Promise<Format | n
     if (/\.cbz$/.test(n)) return 'cbz';
     if (/\.(fbz|fb2\.zip)$/.test(n)) return 'fb2';
     if (/\.epub$/.test(n)) return 'epub';
+    if (/\.docx$/.test(n)) return 'docx';
     // An unnamed zip: an EPUB carries its mimetype first.
     const s = new TextDecoder().decode(await file.slice(0, 120).arrayBuffer());
     if (s.includes('application/epub+zip')) return 'epub';
+    if (s.includes('[Content_Types].xml') || s.includes('word/')) return 'docx';
     return 'cbz';
   }
   if (ascii(60, 68) === 'BOOKMOBI' || ascii(60, 68) === 'TEXtREAd') return /\.(azw3|kf8|azw)$/.test(n) ? 'azw3' : 'mobi';
@@ -59,7 +61,7 @@ export async function detectFormat(file: Blob, name: string): Promise<Format | n
 export async function openBook(blob: Blob, format: Format, password?: string): Promise<FBook> {
   const ext = format === 'azw3' ? 'azw3' : format;
   const file = blob instanceof File ? blob : new File([blob], `book.${ext}`, { type: blob.type });
-  if (format === 'txt' || format === 'md' || format === 'html') return textBook(file, format);
+  if (format === 'txt' || format === 'md' || format === 'html' || format === 'docx') return textBook(file, format);
   if (format === 'pdf') {
     const { makePDF } = await loadPDF();
     try {
@@ -171,13 +173,41 @@ function mdSections(text: string): Section[] {
   return sections;
 }
 
-async function textBook(file: File, format: 'txt' | 'md' | 'html'): Promise<FBook> {
-  const text = await decodeText(file);
+/** Word documents, through mammoth: real headings become chapters. */
+async function docxHTML(file: File) {
+  const mod = (await import('mammoth/mammoth.browser.min.js')) as unknown as { default?: Mammoth } & Mammoth;
+  const mammoth = mod.default ?? mod;
+  const { value } = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() });
+  return value;
+}
+type Mammoth = { convertToHtml: (i: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }> };
+
+function htmlSections(html: string): Section[] {
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+  const sections: Section[] = [];
+  let cur: Section = { title: '', html: '' };
+  for (const node of [...doc.body.childNodes]) {
+    const el = node as Element;
+    if (el.tagName === 'H1' || el.tagName === 'H2') {
+      if (cur.html.replace(/<[^>]+>/g, '').trim()) sections.push(cur);
+      cur = { title: el.textContent?.trim() ?? '', html: '' };
+    }
+    cur.html += el.outerHTML ?? esc(node.textContent ?? '');
+  }
+  if (cur.html) sections.push(cur);
+  return sections;
+}
+
+async function textBook(file: File, format: 'txt' | 'md' | 'html' | 'docx'): Promise<FBook> {
+  const text = format === 'docx' ? '' : await decodeText(file);
   const name = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
   let title = name;
   let author = '';
   let sections: Section[];
-  if (format === 'html') {
+  if (format === 'docx') {
+    sections = htmlSections(await docxHTML(file));
+    title = name;
+  } else if (format === 'html') {
     const doc = new DOMParser().parseFromString(text, 'text/html');
     doc.querySelectorAll('script, iframe, object, embed').forEach((n) => n.remove());
     title = doc.title || name;
